@@ -1,38 +1,20 @@
-Wynnic Sessions
+# Wynnic Sessions v2.0 (Player Release)
 
-![Wynnic Sessions](https://github.com/user-attachments/assets/wynnic-sessions-preview.png)
+Organize your Grinding sessions on wynncraft, Ingredient farming, Mythic farming or profession grinding, track everything and greatly upgrade the QOL of your sessions.
+This repository folder is a player-ready release package (no source code).
 
-Download
+Open the menu with K (you can change in keybind minecraft menu).
 
-1. Download the jar from GitHub Releases
-2. Drop it in .minecraft/mods
-3. Launch Minecraft with Fabric
+## Install
+1. Install Fabric Loader for Minecraft 1.21.11.
+2. Install Fabric API in your `mods` folder.
+3. Install Graphene-UI-152 in your `mods` folder.
+4. Launch Minecraft.
 
-Requirements
+## Notes
+- No source code is included in this release package. Message the author on his github to get the source code.
 
-- Minecraft 1.21.11
-- graphene
-- Fabric Loader 0.18.4+
-- Fabric API
-- Java 21+
-
-What it does
-
-Track your Wynncraft farming sessions with a real-time HUD.
-Kills, timer, loot, emerald gains, mythic probability, market prices.
-Supports Mythics, Ingredients and Gathering presets.
-
-How to use
-
-1. Press K to open the menu
-2. Pick a preset (Mythics / Ingredients / Gathering)
-3. Start your session
-4. HUD shows live stats, adjust position and colors in settings
-5. Stop session to save the recap
-
-Credits
-
-Developer: PouettePouette
-Mod: Wynnic Sessions
-Version: 1.0.0
-Minecraft: 1.21.11
+<img width="1920" height="1200" alt="2026-03-21_03 11 12" src="https://github.com/user-attachments/assets/db252f15-a267-44f8-b08d-8d0663367f79" />
+<img width="1920" height="1200" alt="2026-03-21_03 07 14" src="https://github.com/user-attachments/assets/c2bb5ec8-0903-45ea-a215-680ed6022f91" />
+<img width="1920" height="1200" alt="2026-03-21_03 08 30" src="https://github.com/user-attachments/assets/a9d13d2d-ede7-4d04-b9ee-d101c7437cdb" />
+<img width="1920" height="1200" alt="2026-03-21_03 08 16" src="https://github.com/user-attachments/assets/478799e9-d85a-44ca-b043-1f80257495c3" />
