@@ -3,6 +3,8 @@
 Organize your Grinding sessions on wynncraft, Ingredient farming, Mythic farming or profession grinding, track everything and greatly upgrade the QOL of your sessions.
 This repository folder is a player-ready release package (no source code).
 
+Open the menu with K (you can change in keybind minecraft menu).
+
 ## Install
 1. Install Fabric Loader for Minecraft 1.21.11.
 2. Install Fabric API in your `mods` folder.
