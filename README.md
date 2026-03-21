@@ -1,5 +1,6 @@
 # Wynnic Sessions v2.0 (Player Release)
 
+Organize your Grinding sessions on wynncraft, Ingredient farming, Mythic farming or profession grinding, track everything and greatly upgrade the QOL of your sessions.
 This repository folder is a player-ready release package (no source code).
 
 ## Install
