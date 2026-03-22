@@ -1,0 +1,37 @@
+{
+	"schemaVersion": 1,
+	"id": "mobgrindsessions",
+	"version": "${version}",
+	"name": "Wynnic Sessions",
+	"description": "Advanced mythic drop probability calculator with customizable HUD overlay for Minecraft",
+	"authors": [
+		"Lordpouette"
+	],
+	"contact": {
+		"homepage": "https://github.com/pouettepouette?tab=repositories",
+		"sources": "https://github.com/pouettepouette?tab=repositories"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/mobkillercalculator/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.example.MobKillerCalculator"
+		],
+		"client": [
+			"com.example.MobKillerCalculatorClient"
+		],
+		"fabric-datagen": [
+			"com.example.MobkillercalculatorDataGenerator"
+		]
+	},
+	"mixins": [
+		"mobkillercalculator.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.18.4",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
