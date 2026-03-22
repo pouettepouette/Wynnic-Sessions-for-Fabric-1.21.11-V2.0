@@ -5,6 +5,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -38,13 +40,14 @@ public class PulseBridge {
 
         BUS.execute(() -> {
             try {
-                String text = block.replace("\r", "");
-                int total = (text.length() + CHUNK_LIMIT - 1) / CHUNK_LIMIT;
-                for (int index = 0; index < total; index++) {
-                    int start = index * CHUNK_LIMIT;
-                    int end = Math.min(text.length(), start + CHUNK_LIMIT);
-                    transmit(text.substring(start, end));
-                    if (index < total - 1) {
+                String text = block.replace("\r", "").trim();
+                List<String> chunks = splitLedgerChunks(text);
+                for (int index = 0; index < chunks.size(); index++) {
+                    String title = chunks.size() > 1
+                        ? "SPOTS REPORT " + (index + 1) + "/" + chunks.size()
+                        : "SPOTS REPORT";
+                    transmit("**" + title + "**\n" + toQuoteBlock(chunks.get(index)));
+                    if (index < chunks.size() - 1) {
                         Thread.sleep(350L);
                     }
                 }
@@ -219,6 +222,43 @@ public class PulseBridge {
             wrote = true;
         }
         return out.toString();
+    }
+
+    private List<String> splitLedgerChunks(String text) {
+        List<String> chunks = new ArrayList<>();
+        if (text == null || text.isBlank()) {
+            return chunks;
+        }
+
+        int start = 0;
+        while (start < text.length()) {
+            int end = Math.min(text.length(), start + CHUNK_LIMIT);
+            if (end < text.length()) {
+                int newline = text.lastIndexOf('\n', end);
+                if (newline > start + (CHUNK_LIMIT / 3)) {
+                    end = newline;
+                }
+            }
+
+            String chunk = text.substring(start, end).trim();
+            if (!chunk.isEmpty()) {
+                chunks.add(chunk);
+            }
+
+            start = end;
+            while (start < text.length() && text.charAt(start) == '\n') {
+                start++;
+            }
+        }
+
+        return chunks;
+    }
+
+    private String toQuoteBlock(String text) {
+        if (text == null || text.isBlank()) {
+            return ">>> (empty)";
+        }
+        return ">>> " + text.replace("\n", "\n>>> ");
     }
 
     private boolean isHeading(String line) {

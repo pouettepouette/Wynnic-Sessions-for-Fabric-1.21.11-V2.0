@@ -19,6 +19,9 @@ public class ModulesHubScreen extends Screen {
     private static final int C_TEXT       = 0xFFE5ECFF;
     private static final int C_MUTED      = 0xFF667196;
     private static final int C_ACCENT     = 0xFF19D9A3;
+    private static final int C_SESSION_PRESET = 0xFFF6B24E;
+    private static final int C_SESSION_RENDER = 0xFF64C8FF;
+    private static final int C_SESSION_COLOR  = 0xFFFF6B9A;
     private static final int C_SWITCH_OFF = 0xFF3A3F52;
     private static final int C_KNOB       = 0xFFEFF4FF;
     private static final int C_TAG_BG     = 0xFF151E34;
@@ -54,15 +57,13 @@ public class ModulesHubScreen extends Screen {
     };
     private static final int TAB_SPOTS        = 0;
     private static final int TAB_SESSIONS     = 1;
-    private static final int TAB_HUD_SETTINGS = 2;
-    private static final int TAB_VALUES       = 3;
-    private static final int TAB_INFO         = 4;
+    private static final int TAB_VALUES       = 2;
+    private static final int TAB_INFO         = 3;
     private int activeTab = TAB_SPOTS;
     private int scrollOffset = 0;
     private final List<Row> sessionRows  = new ArrayList<>();
     private final List<Row> valuesRows   = new ArrayList<>();
     private final List<Row> spotRows     = new ArrayList<>();
-    private final List<Row> hudSettingsRows = new ArrayList<>();
     private final List<Row> infoRows     = new ArrayList<>();
     private EditBox lootBonusBox, lootQualityBox, charmBonusBox;
     private EditBox supportMessageBox;
@@ -73,6 +74,8 @@ public class ModulesHubScreen extends Screen {
     private boolean isDraggingHud = false;
     private double dragStartMouseX, dragStartMouseY;
     private int dragStartHudX, dragStartHudY;
+    private long lastPresetClickTime = 0;
+    private String lastPresetClickName = "";
     private boolean dragAxisXUnlocked = false;
     private boolean dragAxisYUnlocked = false;
     private boolean dragPrimaryAxisChosen = false;
@@ -152,7 +155,6 @@ public class ModulesHubScreen extends Screen {
         buildSessionRows();
         buildValuesRows();
         buildSpotRows();
-        buildHudSettingsRows();
         buildInfoRows();
         ConfigManager.EmbeddedSpotsLayout spotLayout = ConfigManager.loadEmbeddedSpotsLayout();
         if (spotLayout != null) {
@@ -190,13 +192,50 @@ public class ModulesHubScreen extends Screen {
             () -> MobKillerCalculatorClient.isHudVisible(),
             () -> MobKillerCalculatorClient.isHudVisible() ? "HUD visible" : "HUD hidden", "RENDER",
             () -> MobKillerCalculatorClient.setHudVisible(!MobKillerCalculatorClient.isHudVisible())));
+        sessionRows.add(Row.action("HUD Preset",
+            this::getActivePresetPaletteDesc,
+            "PRESET",
+            () -> { MobKillerCalculatorClient.cycleActivePreset(); refreshHudOrderState(); }));
+        sessionRows.add(Row.header("HUD Appearance"));
+        sessionRows.add(Row.toggle("Text Shadow",
+            () -> MobKillerCalculatorClient.isHudTextShadowEnabled(),
+            () -> MobKillerCalculatorClient.getHudTextShadowLabel(), "RENDER",
+            () -> MobKillerCalculatorClient.toggleHudTextShadow()));
+        sessionRows.add(Row.toggle("HUD Background",
+            () -> MobKillerCalculatorClient.isHudBackgroundEnabled(),
+            () -> MobKillerCalculatorClient.getHudBackgroundLabel(), "RENDER",
+            () -> MobKillerCalculatorClient.toggleHudBackground()));
+        sessionRows.add(Row.action("Reset HUD Position", () -> "Center the HUD overlay.", "RENDER",
+            () -> { MobKillerCalculatorClient.setHudX(this.width / 2); MobKillerCalculatorClient.setHudY(this.height / 2); }));
+        sessionRows.add(Row.header("HUD Colors"));
+        sessionRows.add(Row.action("Current Color",
+            this::getHudColorPalettePreview,
+            "COLOR",
+            () -> shiftHudColorSelection(1)));
         sessionRows.add(Row.header("HUD Presets"));
-        sessionRows.add(Row.action("Mythics", () -> "Mythic tracking layout.", "PRESET",
-            () -> { MobKillerCalculatorClient.applyMythicsPreset(); refreshHudOrderState(); }));
-        sessionRows.add(Row.action("Ingredients", () -> "Ingredient drop layout.", "PRESET",
-            () -> { MobKillerCalculatorClient.applyIngredientsPreset(); refreshHudOrderState(); }));
-        sessionRows.add(Row.action("Gathering", () -> "Gathering activity layout.", "PRESET",
-            () -> { MobKillerCalculatorClient.applyGatheringPreset(); refreshHudOrderState(); }));
+        addPresetChooserRow("mythic", "Mythic Preset");
+        addPresetChooserRow("ingredient", "Ingredient Preset");
+        addPresetChooserRow("gathering", "Gathering Preset");
+        addPresetChooserRow("custom", "Custom Preset");
+    }
+
+    private void addPresetChooserRow(String presetKey, String rowName) {
+        sessionRows.add(Row.actionButtons(
+            rowName,
+            () -> MobKillerCalculatorClient.getHudPresetPreview(presetKey),
+            "PRESET",
+            "Edit",
+            () -> {
+                if (this.minecraft != null) {
+                    this.minecraft.setScreen(new HudPresetEditorScreen(this, presetKey));
+                }
+            },
+            null,
+            () -> {
+                MobKillerCalculatorClient.applyHudPresetByKey(presetKey);
+                refreshHudOrderState();
+            }
+        ));
     }
 
     private void buildValuesRows() {
@@ -285,39 +324,6 @@ public class ModulesHubScreen extends Screen {
         spotRows.add(Row.label("Spot Stats", () -> MobKillerCalculatorClient.getActiveFarmSpotStatsSummary()));
     }
 
-    private void buildHudSettingsRows() {
-        hudSettingsRows.clear();
-        hudSettingsRows.add(Row.header("HUD Appearance"));
-        hudSettingsRows.add(Row.toggle("Text Shadow",
-            () -> MobKillerCalculatorClient.isHudTextShadowEnabled(),
-            () -> MobKillerCalculatorClient.getHudTextShadowLabel(), "RENDER",
-            () -> MobKillerCalculatorClient.toggleHudTextShadow()));
-        hudSettingsRows.add(Row.toggle("HUD Background",
-            () -> MobKillerCalculatorClient.isHudBackgroundEnabled(),
-            () -> MobKillerCalculatorClient.getHudBackgroundLabel(), "RENDER",
-            () -> MobKillerCalculatorClient.toggleHudBackground()));
-        hudSettingsRows.add(Row.action("Reset HUD Position", () -> "Center the HUD overlay.", "RENDER",
-            () -> { MobKillerCalculatorClient.setHudX(this.width / 2); MobKillerCalculatorClient.setHudY(this.height / 2); }));
-        hudSettingsRows.add(Row.header("HUD Colors"));
-        hudSettingsRows.add(Row.action("Current Color",
-            this::getHudColorPalettePreview,
-            "COLOR",
-            () -> shiftHudColorSelection(1)));
-        hudSettingsRows.add(Row.header("HUD Line Order"));
-        hudSettingsRows.add(Row.action("Selected Line", this::selectedLineDesc, "HUD",
-            this::cycleSelectedHudLine));
-            hudSettingsRows.add(Row.action("Move Up ↑", () -> "", "HUD",
-            () -> MobKillerCalculatorClient.moveHudLineUp(selectedHudLineId)));
-            hudSettingsRows.add(Row.action("Move Down ↓", () -> "", "HUD",
-            () -> MobKillerCalculatorClient.moveHudLineDown(selectedHudLineId)));
-        hudSettingsRows.add(Row.action("Delete Line -", () -> "", "HUD",
-            () -> { if (MobKillerCalculatorClient.deleteHudLine(selectedHudLineId)) refreshHudOrderState(); }));
-        hudSettingsRows.add(Row.action("Add Line", this::addLineDesc, "HUD",
-            this::cycleAddHudLine));
-        hudSettingsRows.add(Row.action("Confirm Add +", () -> "", "HUD",
-            () -> { MobKillerCalculatorClient.addHudLine(selectedAddHudLineId); refreshHudOrderState(); }));
-    }
-
     private void buildInfoRows() {
         infoRows.clear();
         infoRows.add(Row.header("Feedback"));
@@ -379,7 +385,7 @@ public class ModulesHubScreen extends Screen {
 
         gui.drawString(this.font, "WYNNIC", 14, 14, C_ACCENT, false);
 
-        String[] tabs = {"Spots", "Sessions", "HUD", "Values", "Informations"};
+        String[] tabs = {"Spots", "Sessions", "Values", "Informations"};
         int y = 48;
         for (int i = 0; i < tabs.length; i++) {
             boolean active = (i == activeTab);
@@ -392,7 +398,7 @@ public class ModulesHubScreen extends Screen {
             }
             gui.drawString(this.font, tabs[i], 14, y + 3, active ? C_TEXT : C_MUTED, false);
             y += 26;
-            if (i == 3) {
+            if (i == 2) {
                 gui.fill(10, y - 4, SIDEBAR_W - 10, y - 3, C_LINE);
             }
         }
@@ -491,8 +497,7 @@ public class ModulesHubScreen extends Screen {
         int bg = hovered ? C_ROW_HOVER : (idx % 2 == 0 ? C_ROW_EVEN : 0x00000000);
         gui.fill(x, y, x + w, y + ROW_H - 1, bg);
         gui.fill(x, y, x + w, y + ROW_H - 1, (blockColor & 0x00FFFFFF) | 0x14000000);
-        int rowLineColor = (activeTab == TAB_HUD_SETTINGS) ? 0xFF2A3E63 : C_LINE;
-        gui.fill(x, y + ROW_H - 1, x + w, y + ROW_H, rowLineColor);
+        gui.fill(x, y + ROW_H - 1, x + w, y + ROW_H, C_LINE);
         gui.fill(x, y, x + 4, y + ROW_H - 1, blockColor);
         if (row.type == RowType.TOGGLE) {
             boolean on = row.stateGetter.get();
@@ -501,17 +506,38 @@ public class ModulesHubScreen extends Screen {
             int pos = row.cycleGetter != null ? row.cycleGetter.get() : 0;
             renderTripleSwitch(gui, x + 8, y + 7, pos, blockColor);
         } else if (row.type == RowType.ACTION) {
-            gui.fill(x + 14, y + 11, x + 18, y + 15, blockColor);
+            if (row.actionLabel != null && !row.actionLabel.isEmpty()) {
+                int[] primary = getActionButtonRect(row, x, y, w, false);
+                drawActionButton(gui, primary, row.actionLabel, blockColor);
+                if (row.secondaryActionLabel != null && !row.secondaryActionLabel.isEmpty()) {
+                    int[] secondary = getActionButtonRect(row, x, y, w, true);
+                    drawActionButton(gui, secondary, row.secondaryActionLabel, blockColor);
+                }
+            } else {
+                gui.fill(x + 14, y + 11, x + 18, y + 15, blockColor);
+            }
         }
         int textX = (row.type == RowType.EDIT_BOX || row.type == RowType.LABEL) ? x + 10 : x + 34;
         gui.drawString(this.font, row.name, textX, y + 8, C_TEXT, false);
         String desc = row.descGetter != null ? row.descGetter.get() : "";
         if (!desc.isEmpty()) {
+            int rightReservedX = x + w - 10;
+            if (row.tag != null) {
+                int tagW = this.font.width(row.tag) + 8;
+                rightReservedX -= (tagW + 8);
+            }
+            if (row.type == RowType.ACTION && row.actionLabel != null && !row.actionLabel.isEmpty()) {
+                int[] primary = getActionButtonRect(row, x, y, w, false);
+                rightReservedX = Math.min(rightReservedX, primary[0] - 8);
+            }
             int descX = Math.max(textX + this.font.width(row.name) + 12, x + w / 3);
-            if (activeTab == TAB_HUD_SETTINGS && "Current Color".equals(row.name)) {
+            if ("Current Color".equals(row.name)) {
                 renderHudColorPalettePreview(gui, descX, y + 8);
+            } else if ("HUD Preset".equals(row.name)) {
+                renderActivePresetPalettePreview(gui, descX, y + 8);
             } else {
-                String trimmed = desc.length() > 60 ? desc.substring(0, 57) + "..." : desc;
+                int availableWidth = Math.max(40, rightReservedX - descX);
+                String trimmed = trimToWidth(desc, availableWidth);
                 gui.drawString(this.font, trimmed, descX, y + 8, C_MUTED, false);
             }
         }
@@ -521,6 +547,57 @@ public class ModulesHubScreen extends Screen {
             gui.fill(tagX, y + 6, tagX + tagW, y + 18, (blockColor & 0x00FFFFFF) | 0x44000000);
             gui.drawString(this.font, row.tag, tagX + 4, y + 8, blockColor & 0xEEFFFFFF, false);
         }
+    }
+
+    private int[] getActionButtonRect(Row row, int x, int y, int w, boolean secondary) {
+        int primaryW = Math.max(42, this.font.width(row.actionLabel == null ? "Run" : row.actionLabel) + 12);
+        int secondaryW = 0;
+        boolean hasSecondary = row.secondaryActionLabel != null && !row.secondaryActionLabel.isEmpty();
+        if (hasSecondary) {
+            secondaryW = Math.max(38, this.font.width(row.secondaryActionLabel) + 12);
+        }
+        int btnY = y + 5;
+        int btnH = 16;
+        int right = x + w - 10;
+        if (secondary && hasSecondary) {
+            int sx = right - secondaryW;
+            return new int[]{sx, btnY, sx + secondaryW, btnY + btnH};
+        }
+        int px = hasSecondary ? right - secondaryW - 6 - primaryW : right - primaryW;
+        if (!hasSecondary && "PRESET".equals(row.tag)) {
+            px -= 58;
+        }
+        return new int[]{px, btnY, px + primaryW, btnY + btnH};
+    }
+
+    private void drawActionButton(GuiGraphics gui, int[] rect, String label, int blockColor) {
+        gui.fill(rect[0], rect[1], rect[2], rect[3], 0x332A3A55);
+        gui.fill(rect[0], rect[1], rect[0] + 2, rect[3], blockColor);
+        int tx = rect[0] + Math.max(4, ((rect[2] - rect[0]) - this.font.width(label)) / 2);
+        gui.drawString(this.font, label, tx, rect[1] + 4, C_TEXT, false);
+    }
+
+    private String trimToWidth(String value, int maxWidth) {
+        if (value == null || value.isEmpty() || maxWidth <= 0) {
+            return "";
+        }
+        if (this.font.width(value) <= maxWidth) {
+            return value;
+        }
+        String ellipsis = "...";
+        int ellipsisW = this.font.width(ellipsis);
+        if (ellipsisW >= maxWidth) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (this.font.width(sb.toString() + c) + ellipsisW > maxWidth) {
+                break;
+            }
+            sb.append(c);
+        }
+        return sb + ellipsis;
     }
 
     private void renderSwitch(GuiGraphics gui, int x, int y, boolean on, int accentColor) {
@@ -1177,6 +1254,29 @@ public class ModulesHubScreen extends Screen {
         return String.join(" | ", HUD_COLOR_NAMES);
     }
 
+    private String getActivePresetPaletteDesc() {
+        return "Mythics | Ingredients | Gathering | Custom";
+    }
+
+    private void renderActivePresetPalettePreview(GuiGraphics gui, int x, int y) {
+        String activeKey = MobKillerCalculatorClient.getActivePresetKey();
+        String[] labels = {"Mythics", "Ingredients", "Gathering", "Custom"};
+        String[] keys   = {"mythic", "ingredient", "gathering", "custom"};
+        int[] activeColors = {C_MYTHIC, C_INGR, C_GATHER, C_ACCENT};
+        int drawX = x;
+        for (int i = 0; i < labels.length; i++) {
+            if (i > 0) {
+                String sep = " | ";
+                gui.drawString(this.font, sep, drawX, y, C_MUTED, false);
+                drawX += this.font.width(sep);
+            }
+            boolean active = keys[i].equals(activeKey);
+            int color = active ? (0xFF000000 | activeColors[i]) : C_MUTED;
+            gui.drawString(this.font, labels[i], drawX, y, color, false);
+            drawX += this.font.width(labels[i]);
+        }
+    }
+
     private void renderHudColorPalettePreview(GuiGraphics gui, int x, int y) {
         syncSelectedHudColorIndex();
         int drawX = x;
@@ -1512,7 +1612,7 @@ public class ModulesHubScreen extends Screen {
         if (super.mouseClicked(event, consumed)) return true;
         if (button != 0) return false;
         int ty = 48;
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 4; i++) {
             if (mx >= 6 && mx <= SIDEBAR_W - 6 && my >= ty - 2 && my <= ty + 18) {
                 activeTab = i;
                 scrollOffset = 0;
@@ -1588,6 +1688,24 @@ public class ModulesHubScreen extends Screen {
                     if (row.onClick != null) row.onClick.run();
                     return true;
                 } else if (row.type == RowType.ACTION) {
+                    if (row.secondaryOnClick != null) {
+                        int[] primary = getActionButtonRect(row, x0, y, rowW, false);
+                        if (mx >= primary[0] && mx <= primary[2] && my >= primary[1] && my <= primary[3]) {
+                            if (row.onClick != null) row.onClick.run();
+                            return true;
+                        }
+                        // Click on row body: single click = secondaryOnClick, double click = onClick
+                        long now = System.currentTimeMillis();
+                        boolean dbl = row.name.equals(lastPresetClickName) && (now - lastPresetClickTime) < 500;
+                        lastPresetClickTime = now;
+                        lastPresetClickName = row.name;
+                        if (dbl) {
+                            if (row.onClick != null) row.onClick.run();
+                        } else {
+                            row.secondaryOnClick.run();
+                        }
+                        return true;
+                    }
                     if (row.onClick != null) row.onClick.run();
                     return true;
                 } else if (row.type == RowType.EDIT_BOX && row.editBox != null) {
@@ -1825,7 +1943,6 @@ public class ModulesHubScreen extends Screen {
     private List<Row> getRowsForActiveTab() {
         return switch (activeTab) {
             case TAB_SESSIONS -> sessionRows;
-            case TAB_HUD_SETTINGS -> hudSettingsRows;
             case TAB_VALUES -> valuesRows;
             case TAB_SPOTS -> spotRows;
             case TAB_INFO -> infoRows;
@@ -1916,8 +2033,9 @@ public class ModulesHubScreen extends Screen {
             case "Ingredients" -> C_INGR;
             case "Gathering" -> C_GATHER;
             case "Session Control" -> C_ACCENT;
-            case "HUD Presets" -> 0xFFFFB870;
-            case "HUD Appearance", "HUD Colors", "HUD Line Order" -> C_RED;
+            case "HUD Presets" -> C_SESSION_PRESET;
+            case "HUD Appearance" -> C_SESSION_RENDER;
+            case "HUD Colors", "HUD Line Order" -> C_SESSION_COLOR;
             case "History" -> C_HISTORY;
             case "Farm Spots" -> C_ACCENT;
             case "Feedback" -> C_INFO;
@@ -1941,13 +2059,15 @@ public class ModulesHubScreen extends Screen {
             case "MYTHIC" -> C_MYTHIC;
             case "INGR" -> C_INGR;
             case "GATHER" -> C_GATHER;
-            case "HUD", "COLOR", "RENDER" -> C_RED;
+            case "HUD" -> C_SESSION_RENDER;
+            case "COLOR" -> C_SESSION_COLOR;
+            case "RENDER" -> C_SESSION_RENDER;
             case "HISTORY" -> C_HISTORY;
             case "INFO" -> C_INFO;
             case "LINK" -> C_LINK;
             case "QOL" -> 0xFF8ED2FF;
             case "CORE" -> C_ACCENT;
-            case "PRESET" -> 0xFFFFB870;
+            case "PRESET" -> C_SESSION_PRESET;
             default -> C_TEXT;
         };
     }
@@ -2007,30 +2127,48 @@ public class ModulesHubScreen extends Screen {
         final BoolGetter stateGetter;
         final StringGetter descGetter;
         final Runnable onClick;
+        final String actionLabel;
+        final String secondaryActionLabel;
+        final Runnable secondaryOnClick;
         final EditBox editBox;
         final IntGetter cycleGetter;
 
-        private Row(RowType type, String name, String tag, BoolGetter stateGetter, StringGetter descGetter, Runnable onClick, EditBox editBox, IntGetter cycleGetter) {
+        private Row(RowType type, String name, String tag, BoolGetter stateGetter, StringGetter descGetter,
+                    Runnable onClick, String actionLabel, String secondaryActionLabel, Runnable secondaryOnClick,
+                    EditBox editBox, IntGetter cycleGetter) {
             this.type = type; this.name = name; this.tag = tag;
             this.stateGetter = stateGetter; this.descGetter = descGetter;
-            this.onClick = onClick; this.editBox = editBox; this.cycleGetter = cycleGetter;
+            this.onClick = onClick;
+            this.actionLabel = actionLabel;
+            this.secondaryActionLabel = secondaryActionLabel;
+            this.secondaryOnClick = secondaryOnClick;
+            this.editBox = editBox;
+            this.cycleGetter = cycleGetter;
         }
 
-        static Row header(String name) { return new Row(RowType.HEADER, name, null, null, null, null, null, null); }
+        static Row header(String name) {
+            return new Row(RowType.HEADER, name, null, null, null, null, null, null, null, null, null);
+        }
         static Row toggle(String name, BoolGetter state, StringGetter desc, String tag, Runnable onClick) {
-            return new Row(RowType.TOGGLE, name, tag, state, desc, onClick, null, null);
+            return new Row(RowType.TOGGLE, name, tag, state, desc, onClick, null, null, null, null, null);
         }
         static Row action(String name, StringGetter desc, String tag, Runnable onClick) {
-            return new Row(RowType.ACTION, name, tag, null, desc, onClick, null, null);
+            return new Row(RowType.ACTION, name, tag, null, desc, onClick, null, null, null, null, null);
+        }
+        static Row actionButtons(String name, StringGetter desc, String tag,
+                                 String primaryActionLabel, Runnable onPrimaryAction,
+                                 String secondaryActionLabel, Runnable onSecondaryAction) {
+            return new Row(RowType.ACTION, name, tag, null, desc, onPrimaryAction,
+                primaryActionLabel, secondaryActionLabel, onSecondaryAction, null, null);
         }
         static Row editBox(String name, EditBox box, String tag) {
-            return new Row(RowType.EDIT_BOX, name, tag, null, null, null, box, null);
+            return new Row(RowType.EDIT_BOX, name, tag, null, null, null, null, null, null, box, null);
         }
         static Row label(String name, StringGetter desc) {
-            return new Row(RowType.LABEL, name, null, null, desc, null, null, null);
+            return new Row(RowType.LABEL, name, null, null, desc, null, null, null, null, null, null);
         }
         static Row cycle(String name, IntGetter state, StringGetter desc, String tag, Runnable onClick) {
-            return new Row(RowType.CYCLE, name, tag, null, desc, onClick, null, state);
+            return new Row(RowType.CYCLE, name, tag, null, desc, onClick, null, null, null, null, state);
         }
     }
 }

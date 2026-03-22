@@ -26,6 +26,7 @@ public class ConfigManager {
     private static final String FARM_SPOTS_KEY = "farmSpots";
     private static final String SPOTS_LAYOUT_KEY = "embeddedSpotsLayout";
     private static final String SPOT_DETAILS_LAYOUT_KEY = "spotDetailsLayout";
+    private static final String HUD_PRESETS_KEY = "hudPresets";
     private static final int MAX_SESSION_HISTORY = 20;
     private static final Object FARM_SPOTS_LOCK = new Object();
 
@@ -132,7 +133,8 @@ public class ConfigManager {
                                      boolean showBothKillSystems,
                                      int priceMode, double manualItemPrice,
                                      boolean ingredientCountAllItems,
-                                     boolean hudTextShadow, boolean hudBackgroundEnabled) {
+                                     boolean hudTextShadow, boolean hudBackgroundEnabled,
+                                     Map<String, List<Integer>> hudPresets) {
         try {
             File configDir = new File(Minecraft.getInstance().gameDirectory, CONFIG_DIR);
             if (!configDir.exists()) {
@@ -165,6 +167,22 @@ public class ConfigManager {
                 lineOrderArray.add(lineId);
             }
             json.add("hudLines", lineOrderArray);
+            JsonObject presetsJson = new JsonObject();
+            if (hudPresets != null && !hudPresets.isEmpty()) {
+                for (Map.Entry<String, List<Integer>> entry : hudPresets.entrySet()) {
+                    if (entry == null || entry.getKey() == null || entry.getValue() == null) {
+                        continue;
+                    }
+                    JsonArray presetArray = new JsonArray();
+                    for (Integer lineId : entry.getValue()) {
+                        if (lineId != null) {
+                            presetArray.add(lineId);
+                        }
+                    }
+                    presetsJson.add(entry.getKey(), presetArray);
+                }
+            }
+            json.add(HUD_PRESETS_KEY, presetsJson);
             try (FileWriter writer = new FileWriter(configFile)) {
                 writer.write(json.toString());
             }
@@ -212,6 +230,24 @@ public class ConfigManager {
                         config.hudLines = new ArrayList<>();
                         for (int i = 0; i < lineOrderArray.size(); i++) {
                             config.hudLines.add(lineOrderArray.get(i).getAsInt());
+                        }
+                    }
+                    config.hudPresets = new LinkedHashMap<>();
+                    if (json.has(HUD_PRESETS_KEY) && json.get(HUD_PRESETS_KEY).isJsonObject()) {
+                        JsonObject presetsJson = json.getAsJsonObject(HUD_PRESETS_KEY);
+                        for (Map.Entry<String, JsonElement> entry : presetsJson.entrySet()) {
+                            if (entry == null || entry.getKey() == null || entry.getValue() == null || !entry.getValue().isJsonArray()) {
+                                continue;
+                            }
+                            List<Integer> presetLines = new ArrayList<>();
+                            JsonArray presetArray = entry.getValue().getAsJsonArray();
+                            for (int i = 0; i < presetArray.size(); i++) {
+                                try {
+                                    presetLines.add(presetArray.get(i).getAsInt());
+                                } catch (Exception ignored) {
+                                }
+                            }
+                            config.hudPresets.put(entry.getKey(), presetLines);
                         }
                     }
 
@@ -1264,6 +1300,7 @@ public class ConfigManager {
         public boolean ingredientCountAllItems;
         public boolean hudTextShadow;
         public boolean hudBackgroundEnabled;
+        public Map<String, List<Integer>> hudPresets;
     }
 
     public static class SpotSessionRecord {

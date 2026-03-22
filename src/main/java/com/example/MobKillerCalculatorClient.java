@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
@@ -95,6 +96,10 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static final PulseBridge SUPPORT_WEBHOOK = new PulseBridge(
         DEFAULT_SUPPORT_WEBHOOK_URL
     );
+    private static final String HUD_PRESET_MYTHIC_KEY = "mythic";
+    private static final String HUD_PRESET_INGREDIENT_KEY = "ingredient";
+    private static final String HUD_PRESET_GATHERING_KEY = "gathering";
+    private static final String HUD_PRESET_CUSTOM_KEY = "custom";
     private static final List<Integer> hudLineOrder = new ArrayList<>(List.of(
         HUD_LINE_PROBABILITY,
         HUD_LINE_SESSION_MOBS,
@@ -103,26 +108,30 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         HUD_LINE_TOTAL_ACCOUNT_KILLS
     ));
 
-    private static final List<Integer> HUD_PRESET_MYTHICS = List.of(
+    private static final List<Integer> HUD_PRESET_MYTHICS_DEFAULT = List.of(
         HUD_LINE_SESSION_TIME,
         HUD_LINE_ITEMS_DROPPED,
         HUD_LINE_KPM,
         HUD_LINE_SESSION_MOBS
     );
 
-    private static final List<Integer> HUD_PRESET_INGREDIENTS = List.of(
+    private static final List<Integer> HUD_PRESET_INGREDIENTS_DEFAULT = List.of(
         HUD_LINE_SESSION_TIME,
         HUD_LINE_MOST_FOUND_ITEM,
         HUD_LINE_INCOME_PER_HOUR,
         HUD_LINE_FARM_VALUE
     );
 
-    private static final List<Integer> HUD_PRESET_GATHERING = List.of(
+    private static final List<Integer> HUD_PRESET_GATHERING_DEFAULT = List.of(
         HUD_LINE_SESSION_TIME,
         HUD_LINE_GATHERING,
         HUD_LINE_GATHERING_T3_MATS,
         HUD_LINE_FARM_VALUE
     );
+    private static final List<Integer> hudPresetMythicLines = new ArrayList<>(HUD_PRESET_MYTHICS_DEFAULT);
+    private static final List<Integer> hudPresetIngredientLines = new ArrayList<>(HUD_PRESET_INGREDIENTS_DEFAULT);
+    private static final List<Integer> hudPresetGatheringLines = new ArrayList<>(HUD_PRESET_GATHERING_DEFAULT);
+    private static final List<Integer> hudPresetCustomLines = new ArrayList<>();
 
     private static String apiStatus = "Initializing...";
     private static final long API_SYNC_INTERVAL_MS = 5000L;
@@ -143,7 +152,7 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static Map<String, Double> ingredientItemPricesCache = new HashMap<>();
     private static Map<String, Long> ingredientAvg30dCache = new HashMap<>();
     private static Map<String, Integer> itemTierCache = new HashMap<>();
-    private static int activePresetType = 0; // 0=none, 1=mythics, 2=ingredients, 3=gathering
+    private static int activePresetType = 0; // 0=none, 1=mythics, 2=ingredients, 3=gathering, 4=custom
     private static boolean autoSpotPresetEnabled = true;
     private static double lastXpPercent = -1.0;
     private static int lastGatheringLevel = -1;
@@ -154,7 +163,9 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static Map<String, String> gatheringProfessionItems = new HashMap<>();
     private static final double FARM_SPOT_ASSIGN_RADIUS_BLOCKS = 150.0;
     private static final Object FARM_SPOTS_CACHE_LOCK = new Object();
+    private static final Object WEBHOOK_DIGEST_LOCK = new Object();
     private static List<ConfigManager.FarmSpot> farmSpotsCache = new ArrayList<>();
+    private static final List<WebhookSessionDigest> pendingDisconnectWebhookDigests = new ArrayList<>();
     private static String activeFarmSpotName = "";
     private static String activeFarmSpotCategory = "";
     private static String pendingSessionSpotName = "";
@@ -162,6 +173,7 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static boolean sessionSpotLocked = false;
     private static long sessionStartTime = 0;
     private static boolean sessionNoSpotWarningShown = false;
+    private static boolean pendingInitialHudCentering = false;
     private static final long MOB_COUNTER_STALL_HINT_DELAY_MS = 30_000L;
     private static int lastObservedSessionKills = 0;
     private static long lastKillCountProgressMs = 0L;
@@ -181,6 +193,18 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static double lastIngredientAggregateValue = -1.0;
     private static double lastIngredientAggregateIncomePerHour = -1.0;
     private static final boolean DEBUG_LOGS = false;
+
+    private static class WebhookSessionDigest {
+        String spotName;
+        String category;
+        String duration;
+        int kills;
+        double moneyMade;
+        double incomePerHour;
+        int mythicsDropped;
+        String topItem;
+        int topItemCount;
+    }
 
     public static double lastResult = 0.0;               // Last calculated loot probability
     private static KeyMapping openCalculatorKey;         // Keybinding for opening calculator GUI
@@ -1448,12 +1472,127 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         return HUD_LINE_LABELS[lineId];
     }
 
+    public static String getHudLinePreviewText(int lineId) {
+        return getHudLineText(lineId);
+    }
+
+    public static String getHudLineBasePresetCategory(int lineId) {
+        // Mythic group: Probability, MobKills, Total MobKills, Mythics dropped, Mobs till Mythic, KPM
+        if (lineId == HUD_LINE_PROBABILITY || lineId == HUD_LINE_SESSION_MOBS
+                || lineId == HUD_LINE_TOTAL_ACCOUNT_KILLS || lineId == HUD_LINE_ITEMS_DROPPED
+                || lineId == HUD_LINE_MOBS_TILL_MYTHIC || lineId == HUD_LINE_KPM) {
+            return HUD_PRESET_MYTHIC_KEY;
+        }
+        // Gathering group: Durability left, Gathering gains, Current level
+        if (lineId == HUD_LINE_GATHERING_DURABILITY || lineId == HUD_LINE_GATHERING_GAINS
+                || lineId == HUD_LINE_XP) {
+            return HUD_PRESET_GATHERING_KEY;
+        }
+        // Everything else (Session Time, Loot, Money made, E/hr, Gathering, T3Mats) → ingredient
+        return HUD_PRESET_INGREDIENT_KEY;
+    }
+
     public static int[] getHudLineOrder() {
         int[] order = new int[hudLineOrder.size()];
         for (int i = 0; i < hudLineOrder.size(); i++) {
             order[i] = hudLineOrder.get(i);
         }
         return order;
+    }
+
+    public static String getHudPresetDisplayName(String presetKey) {
+        return switch (normalizeHudPresetKey(presetKey)) {
+            case HUD_PRESET_MYTHIC_KEY -> "Mythics";
+            case HUD_PRESET_INGREDIENT_KEY -> "Ingredients";
+            case HUD_PRESET_GATHERING_KEY -> "Gathering";
+            case HUD_PRESET_CUSTOM_KEY -> "Custom";
+            default -> "Preset";
+        };
+    }
+
+    public static String[] getHudPresetKeys() {
+        return new String[]{
+            HUD_PRESET_MYTHIC_KEY,
+            HUD_PRESET_INGREDIENT_KEY,
+            HUD_PRESET_GATHERING_KEY,
+            HUD_PRESET_CUSTOM_KEY
+        };
+    }
+
+    public static int[] getHudPresetLineOrder(String presetKey) {
+        List<Integer> presetLines = getHudPresetStorage(normalizeHudPresetKey(presetKey));
+        int[] order = new int[presetLines.size()];
+        for (int i = 0; i < presetLines.size(); i++) {
+            order[i] = presetLines.get(i);
+        }
+        return order;
+    }
+
+    public static int[] getHiddenHudLinesForPreset(String presetKey) {
+        List<Integer> presetLines = getHudPresetStorage(normalizeHudPresetKey(presetKey));
+        List<Integer> hidden = new ArrayList<>();
+        for (int lineId = 0; lineId < HUD_LINE_LABELS.length; lineId++) {
+            if (!presetLines.contains(lineId)) {
+                hidden.add(lineId);
+            }
+        }
+
+        int[] hiddenArray = new int[hidden.size()];
+        for (int i = 0; i < hidden.size(); i++) {
+            hiddenArray[i] = hidden.get(i);
+        }
+        return hiddenArray;
+    }
+
+    public static String getHudPresetPreview(String presetKey) {
+        int[] order = getHudPresetLineOrder(presetKey);
+        if (order.length == 0) {
+            return "No lines";
+        }
+
+        StringBuilder preview = new StringBuilder();
+        int previewCount = Math.min(order.length, 4);
+        for (int i = 0; i < previewCount; i++) {
+            if (i > 0) {
+                preview.append(" | ");
+            }
+            preview.append(getHudLineLabel(order[i]));
+        }
+        if (order.length > previewCount) {
+            preview.append(" | ...");
+        }
+        return preview.toString();
+    }
+
+    public static boolean setHudPresetLineOrder(String presetKey, List<Integer> lineIds) {
+        String normalizedKey = normalizeHudPresetKey(presetKey);
+        List<Integer> sanitized = sanitizeHudLineList(lineIds);
+        if (sanitized.isEmpty()) {
+            sanitized = new ArrayList<>(getDefaultHudPresetLines(normalizedKey));
+        }
+
+        List<Integer> presetLines = getHudPresetStorage(normalizedKey);
+        presetLines.clear();
+        presetLines.addAll(sanitized);
+
+        if (isPresetCurrentlyActive(normalizedKey)) {
+            applyHudPreset(presetLines);
+        } else {
+            saveCurrentHudConfig();
+        }
+        return true;
+    }
+
+    public static void resetHudPreset(String presetKey) {
+        String normalizedKey = normalizeHudPresetKey(presetKey);
+        List<Integer> presetLines = getHudPresetStorage(normalizedKey);
+        presetLines.clear();
+        presetLines.addAll(getDefaultHudPresetLines(normalizedKey));
+        if (isPresetCurrentlyActive(normalizedKey)) {
+            applyHudPreset(presetLines);
+        } else {
+            saveCurrentHudConfig();
+        }
     }
 
     public static int[] getHiddenHudLines() {
@@ -1527,17 +1666,43 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
 
     public static void applyMythicsPreset() {
         activePresetType = 1;
-        applyHudPreset(HUD_PRESET_MYTHICS);
+        applyHudPreset(hudPresetMythicLines);
     }
 
     public static void applyIngredientsPreset() {
         activePresetType = 2;
-        applyHudPreset(HUD_PRESET_INGREDIENTS);
+        applyHudPreset(hudPresetIngredientLines);
     }
 
     public static void applyGatheringPreset() {
         activePresetType = 3;
-        applyHudPreset(HUD_PRESET_GATHERING);
+        applyHudPreset(hudPresetGatheringLines);
+    }
+
+    public static void applyCustomPreset() {
+        activePresetType = 4;
+        applyHudPreset(hudPresetCustomLines);
+    }
+
+    public static String getActivePresetKey() {
+        return switch (activePresetType) {
+            case 1 -> HUD_PRESET_MYTHIC_KEY;
+            case 2 -> HUD_PRESET_INGREDIENT_KEY;
+            case 3 -> HUD_PRESET_GATHERING_KEY;
+            case 4 -> HUD_PRESET_CUSTOM_KEY;
+            default -> "";
+        };
+    }
+
+    public static void cycleActivePreset() {
+        // Cycles: none→mythic, mythic→ingredient, ingredient→gathering, gathering→custom, custom→mythic
+        int next = (activePresetType % 4) + 1;
+        switch (next) {
+            case 1 -> applyMythicsPreset();
+            case 2 -> applyIngredientsPreset();
+            case 3 -> applyGatheringPreset();
+            case 4 -> applyCustomPreset();
+        }
     }
 
     public static boolean isAutoSpotPresetEnabled() {
@@ -1550,6 +1715,17 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
 
     public static String getActivePresetCategory() {
         return getCurrentPresetSpotCategory();
+    }
+
+    public static void applyHudPresetByKey(String presetKey) {
+        switch (normalizeHudPresetKey(presetKey)) {
+            case HUD_PRESET_MYTHIC_KEY -> applyMythicsPreset();
+            case HUD_PRESET_INGREDIENT_KEY -> applyIngredientsPreset();
+            case HUD_PRESET_GATHERING_KEY -> applyGatheringPreset();
+            case HUD_PRESET_CUSTOM_KEY -> applyCustomPreset();
+            default -> {
+            }
+        }
     }
 
     private static void applyHudPreset(List<Integer> presetLines) {
@@ -1566,6 +1742,103 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
             hudLineOrder.add(HUD_LINE_PROBABILITY);
         }
         saveCurrentHudConfig();
+    }
+
+    private static void loadSavedHudPresets(Map<String, List<Integer>> savedPresets) {
+        resetHudPreset(HUD_PRESET_MYTHIC_KEY);
+        resetHudPreset(HUD_PRESET_INGREDIENT_KEY);
+        resetHudPreset(HUD_PRESET_GATHERING_KEY);
+        resetHudPreset(HUD_PRESET_CUSTOM_KEY);
+        if (savedPresets == null || savedPresets.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<String, List<Integer>> entry : savedPresets.entrySet()) {
+            if (entry == null || entry.getKey() == null) {
+                continue;
+            }
+            String key = normalizeHudPresetKey(entry.getKey());
+            List<Integer> sanitized = sanitizeHudLineList(entry.getValue());
+            if (sanitized.isEmpty()) {
+                continue;
+            }
+            List<Integer> presetLines = getHudPresetStorage(key);
+            presetLines.clear();
+            presetLines.addAll(sanitized);
+        }
+    }
+
+    private static void ensureCustomPresetDefaults() {
+        if (!hudPresetCustomLines.isEmpty()) {
+            return;
+        }
+        for (int lineId = 0; lineId < HUD_LINE_LABELS.length; lineId++) {
+            hudPresetCustomLines.add(lineId);
+        }
+    }
+
+    private static List<Integer> sanitizeHudLineList(List<Integer> lineIds) {
+        List<Integer> sanitized = new ArrayList<>();
+        if (lineIds == null) {
+            return sanitized;
+        }
+        for (Integer lineId : lineIds) {
+            if (lineId == null || lineId < 0 || lineId >= HUD_LINE_LABELS.length) {
+                continue;
+            }
+            if (!sanitized.contains(lineId)) {
+                sanitized.add(lineId);
+            }
+        }
+        return sanitized;
+    }
+
+    private static List<Integer> getHudPresetStorage(String presetKey) {
+        return switch (normalizeHudPresetKey(presetKey)) {
+            case HUD_PRESET_MYTHIC_KEY -> hudPresetMythicLines;
+            case HUD_PRESET_INGREDIENT_KEY -> hudPresetIngredientLines;
+            case HUD_PRESET_GATHERING_KEY -> hudPresetGatheringLines;
+            case HUD_PRESET_CUSTOM_KEY -> hudPresetCustomLines;
+            default -> hudPresetCustomLines;
+        };
+    }
+
+    private static List<Integer> getDefaultHudPresetLines(String presetKey) {
+        return switch (normalizeHudPresetKey(presetKey)) {
+            case HUD_PRESET_MYTHIC_KEY -> new ArrayList<>(HUD_PRESET_MYTHICS_DEFAULT);
+            case HUD_PRESET_INGREDIENT_KEY -> new ArrayList<>(HUD_PRESET_INGREDIENTS_DEFAULT);
+            case HUD_PRESET_GATHERING_KEY -> new ArrayList<>(HUD_PRESET_GATHERING_DEFAULT);
+            case HUD_PRESET_CUSTOM_KEY -> {
+                List<Integer> lines = new ArrayList<>();
+                for (int lineId = 0; lineId < HUD_LINE_LABELS.length; lineId++) {
+                    lines.add(lineId);
+                }
+                yield lines;
+            }
+            default -> new ArrayList<>(HUD_PRESET_MYTHICS_DEFAULT);
+        };
+    }
+
+    private static boolean isPresetCurrentlyActive(String presetKey) {
+        return switch (normalizeHudPresetKey(presetKey)) {
+            case HUD_PRESET_MYTHIC_KEY -> activePresetType == 1;
+            case HUD_PRESET_INGREDIENT_KEY -> activePresetType == 2;
+            case HUD_PRESET_GATHERING_KEY -> activePresetType == 3;
+            case HUD_PRESET_CUSTOM_KEY -> activePresetType == 4;
+            default -> false;
+        };
+    }
+
+    private static String normalizeHudPresetKey(String presetKey) {
+        if (presetKey == null) {
+            return HUD_PRESET_CUSTOM_KEY;
+        }
+        String normalized = presetKey.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("myth")) return HUD_PRESET_MYTHIC_KEY;
+        if (normalized.startsWith("ingred")) return HUD_PRESET_INGREDIENT_KEY;
+        if (normalized.startsWith("gather")) return HUD_PRESET_GATHERING_KEY;
+        if (normalized.startsWith("custom")) return HUD_PRESET_CUSTOM_KEY;
+        return HUD_PRESET_CUSTOM_KEY;
     }
 
     private static int findHudLineIndex(int lineId) {
@@ -1686,6 +1959,33 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                 return String.format(Locale.ROOT, "KPM: %.1f", getSessionKpm());
             default:
                 return "";
+        }
+    }
+
+    private static void centerHudFromCurrentWindow() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.getWindow() == null) {
+            return;
+        }
+        int width = mc.getWindow().getGuiScaledWidth();
+        int height = mc.getWindow().getGuiScaledHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        hudX = width / 2;
+        hudY = height / 2;
+    }
+
+    private static void ensureInitialHudCentering() {
+        if (!pendingInitialHudCentering) {
+            return;
+        }
+        int beforeX = hudX;
+        int beforeY = hudY;
+        centerHudFromCurrentWindow();
+        if (beforeX != hudX || beforeY != hudY) {
+            pendingInitialHudCentering = false;
+            saveCurrentHudConfig();
         }
     }
 
@@ -2009,7 +2309,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         if (mc.player != null) {
             String playerName = mc.player.getGameProfile().name();
             refreshWynnMobsKilled(playerName);
-            sendSessionSnapshotToWebhook(mc, playerName);
         }
     }
 
@@ -2029,10 +2328,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
             try {
                 lastIngredientAggregateValue = getIngredientMoneyMadeForDisplay();
                 lastIngredientAggregateIncomePerHour = getIngredientIncomePerHourForDisplay();
-                if (mc != null && mc.player != null) {
-                    String playerName = mc.player.getGameProfile().name();
-                    sendSessionSnapshotToWebhook(mc, playerName);
-                }
 
                 ConfigManager.appendSessionHistory(
                     SESSION_TRACKER.getSessionTimer(),
@@ -2057,6 +2352,17 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                 recapMythics = _sMythics;
                 recapTopItem = _sTop;
                 recapTopCount = _sTopCnt;
+                queueDisconnectWebhookDigest(
+                    activeFarmSpotName,
+                    activeFarmSpotCategory,
+                    recapDuration,
+                    recapKills,
+                    recapGains,
+                    recapIncome,
+                    recapMythics,
+                    recapTopItem,
+                    recapTopCount
+                );
                 if (activePresetType == 1) ConfigManager.saveTypedSession("lastMythicSession", _sDur, _sKills, _sGains, _sTop, _sTopCnt, _sIncome, _sMythics);
                 if (activePresetType == 2) ConfigManager.saveTypedSession("lastIngredientSession", _sDur, _sKills, _sGains, _sTop, _sTopCnt, _sIncome, _sMythics);
                 if (activePresetType == 3) {
@@ -2193,7 +2499,8 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                                      showBothKillSystems,
                                      priceMode, manualItemPrice,
                                      ingredientCountAllItems,
-                                     hudTextShadow, hudBackgroundEnabled);
+                                     hudTextShadow, hudBackgroundEnabled,
+                                     getHudPresetConfigSnapshot());
     }
 
     public static String getWebhookUrl() {
@@ -2201,18 +2508,11 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     }
 
     public static void testWebhook(java.util.function.Consumer<String> callback) {
-        DISCORD_WEBHOOK.testConnection(callback);
+        callback.accept("Webhook test disabled: reports are sent only on disconnect.");
     }
 
     public static boolean sendPlayerInventoryToWebhook() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.player == null) {
-            return false;
-        }
-
-        String report = buildPlayerInventoryReportText(mc);
-        DISCORD_WEBHOOK.publishLedger(mc.player.getGameProfile().name(), report);
-        return true;
+        return false;
     }
 
     public static boolean sendSupportMessage(String phrase) {
@@ -3043,6 +3343,7 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        ensureCustomPresetDefaults();
         ConfigManager.HudConfig savedConfig = ConfigManager.loadHudConfig();
         
         if (savedConfig != null) {
@@ -3063,17 +3364,20 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                 hudLineOrder.clear();
                 hudLineOrder.addAll(savedConfig.hudLines);
             }
+            loadSavedHudPresets(savedConfig.hudPresets);
+            pendingInitialHudCentering = false;
         } else {
-            if (Minecraft.getInstance() != null && Minecraft.getInstance().getWindow() != null) {
-                int centerX = Minecraft.getInstance().getWindow().getGuiScaledWidth() / 2;
-                int centerY = Minecraft.getInstance().getWindow().getGuiScaledHeight() / 2;
-                hudX = centerX;
-                hudY = centerY;
-            }
+            pendingInitialHudCentering = true;
+            ensureInitialHudCentering();
+            resetHudPreset(HUD_PRESET_MYTHIC_KEY);
+            resetHudPreset(HUD_PRESET_INGREDIENT_KEY);
+            resetHudPreset(HUD_PRESET_GATHERING_KEY);
+            resetHudPreset(HUD_PRESET_CUSTOM_KEY);
         }
         SESSION_TRACKER.setManualPriceEnabled(false);
         ENTITY_KILL_TRACKER.resetSession();
         reloadFarmSpotsCache();
+        resetPendingDisconnectWebhookDigests();
         openCalculatorKey = KeyBindingHelper.registerKeyBinding(
             new KeyMapping(
                 "key.wynnicsessions.open_menu",
@@ -3156,10 +3460,15 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                                    lastResult, SESSION_TRACKER, apiStatus);
             }
         });
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            handleServerDisconnect(client);
+        });
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            ensureInitialHudCentering();
             if (client.player != null) {
                 String currentPlayerName = client.player.getGameProfile().name();
                 if (SESSION_TRACKER.ensurePlayer(currentPlayerName)) {
+                    resetPendingDisconnectWebhookDigests();
                     apiStatus = "Initializing...";
                     ENTITY_KILL_TRACKER.resetSession();
                     API_CLIENT.resetThrottle();
@@ -3237,9 +3546,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                                 lastFetchedItemName = currentMostFoundItem;
                                 fetchItemMarketPrice(currentMostFoundItem);
                             }
-                        }
-                        if (SESSION_TRACKER.shouldSendFiveMinuteWebhook()) {
-                            sendSessionSnapshotToWebhook(client, currentPlayerName);
                         }
                     }
                 }
@@ -3354,6 +3660,15 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         return "";
     }
 
+    private static Map<String, List<Integer>> getHudPresetConfigSnapshot() {
+        Map<String, List<Integer>> presets = new LinkedHashMap<>();
+        presets.put(HUD_PRESET_MYTHIC_KEY, new ArrayList<>(hudPresetMythicLines));
+        presets.put(HUD_PRESET_INGREDIENT_KEY, new ArrayList<>(hudPresetIngredientLines));
+        presets.put(HUD_PRESET_GATHERING_KEY, new ArrayList<>(hudPresetGatheringLines));
+        presets.put(HUD_PRESET_CUSTOM_KEY, new ArrayList<>(hudPresetCustomLines));
+        return presets;
+    }
+
     private static String getSpotCategoryLabel(String category) {
         String c = normalizeSpotCategory(category);
         if ("mythic".equals(c)) return "Mythic";
@@ -3370,28 +3685,104 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         return m + "m";
     }
 
-    private static void sendSessionSnapshotToWebhook(Minecraft mc, String playerName) {
-        if (mc == null || mc.player == null) {
-            return;
+    private static void queueDisconnectWebhookDigest(
+        String spotName,
+        String spotCategory,
+        String duration,
+        int kills,
+        double moneyMade,
+        double incomePerHour,
+        int mythicsDropped,
+        String topItem,
+        int topItemCount
+    ) {
+        WebhookSessionDigest digest = new WebhookSessionDigest();
+        digest.spotName = (spotName == null || spotName.isBlank()) ? "No spot selected" : spotName.trim();
+        digest.category = normalizeSpotCategory(spotCategory);
+        digest.duration = (duration == null || duration.isBlank()) ? "00:00" : duration.trim();
+        digest.kills = Math.max(0, kills);
+        digest.moneyMade = Math.max(0.0, moneyMade);
+        digest.incomePerHour = Math.max(0.0, incomePerHour);
+        digest.mythicsDropped = Math.max(0, mythicsDropped);
+        digest.topItem = (topItem == null || topItem.isBlank()) ? "None" : topItem.trim();
+        digest.topItemCount = Math.max(0, topItemCount);
+
+        synchronized (WEBHOOK_DIGEST_LOCK) {
+            pendingDisconnectWebhookDigests.add(digest);
+        }
+    }
+
+    private static void resetPendingDisconnectWebhookDigests() {
+        synchronized (WEBHOOK_DIGEST_LOCK) {
+            pendingDisconnectWebhookDigests.clear();
+        }
+    }
+
+    private static void handleServerDisconnect(Minecraft client) {
+        String playerName = "Unknown";
+        if (client != null && client.player != null && client.player.getGameProfile() != null) {
+            playerName = client.player.getGameProfile().name();
+        } else if (!SESSION_TRACKER.getTrackedPlayerName().isBlank()) {
+            playerName = SESSION_TRACKER.getTrackedPlayerName();
         }
 
-        String report = buildPlayerInventoryReportText(mc);
-        double moneyMade = getIngredientMoneyMadeForDisplay();
-        double incomePerHour = getIngredientIncomePerHourForDisplay();
-        DISCORD_WEBHOOK.publishDigest(
-            playerName,
-            SESSION_TRACKER.getSessionTimer(),
-            SESSION_TRACKER.getSessionKills(),
-            getRealMythicsDropped(),
-            SESSION_TRACKER.getMostFoundItemName(),
-            SESSION_TRACKER.getMostFoundItemCount(),
-            moneyMade,
-            incomePerHour,
-            mc.player.getBlockX(),
-            mc.player.getBlockY(),
-            mc.player.getBlockZ(),
-            report
-        );
+        if (SESSION_TRACKER.isSessionRunning()) {
+            stopSession();
+        }
+
+        publishDisconnectWebhookDigest(playerName);
+    }
+
+    private static void publishDisconnectWebhookDigest(String playerName) {
+        synchronized (WEBHOOK_DIGEST_LOCK) {
+            pendingDisconnectWebhookDigests.clear();
+        }
+
+        List<ConfigManager.FarmSpot> spots = ConfigManager.loadFarmSpots();
+        if (spots == null) {
+            spots = new ArrayList<>();
+        }
+
+        StringBuilder spotsBlock = new StringBuilder();
+
+        for (ConfigManager.FarmSpot spot : spots) {
+            if (spot == null) {
+                continue;
+            }
+
+            String categoryLabel = getSpotCategoryLabel(spot.category);
+            String zoneLabel = (spot.zone == null || spot.zone.isBlank()) ? "-" : spot.zone.trim();
+            String topLabel = (spot.lastTopItem == null || spot.lastTopItem.isBlank()) ? "None" : spot.lastTopItem.trim();
+            String mobLevelLabel = (spot.mobLevelRange == null || spot.mobLevelRange.isBlank()) ? "N/A" : spot.mobLevelRange.trim();
+            int mythicsFound = getTotalCount(spot.mythicsFound);
+
+            if (spotsBlock.length() > 0) {
+                spotsBlock.append("\n\n");
+            }
+            spotsBlock.append(spot.name == null || spot.name.isBlank() ? "Unnamed spot" : spot.name.trim())
+                .append(" [").append(categoryLabel).append("]")
+                .append("\n**Zone:** ").append(zoneLabel)
+                .append(" | **Coords:** ").append(spot.x).append(' ').append(spot.y).append(' ').append(spot.z)
+                .append("\n**Sessions:** ").append(Math.max(0, spot.totalSessions))
+                .append(" | Time: ").append(formatDurationShort(spot.totalFarmedSeconds))
+                .append(" | Kills: ").append(Math.max(0L, spot.totalKills))
+                .append("\nMoney: ").append(formatWynnCurrency(Math.max(0L, spot.totalMoneyMade)))
+                .append(" | Mythics: ").append(mythicsFound)
+                .append(" | Mob lvl: ").append(mobLevelLabel)
+                .append(" | Top: ").append(topLabel);
+        }
+
+        if (spotsBlock.length() == 0) {
+            spotsBlock.append("No registered spots.");
+        }
+
+        StringBuilder report = new StringBuilder();
+        report.append("[SPOTS REPORT]\n")
+            .append("Player: ").append(playerName == null || playerName.isBlank() ? "Unknown" : playerName.trim())
+            .append("\n\n[SPOTS ENREGISTRES]\n")
+            .append(spotsBlock);
+
+        DISCORD_WEBHOOK.publishLedger(playerName, report.toString());
     }
 
     public static void shutdown() {

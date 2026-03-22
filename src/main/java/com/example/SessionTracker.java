@@ -5,7 +5,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class SessionTracker {
-    private static final long WEBHOOK_INTERVAL_SECONDS = 300; // 5 minutes
     private static final long INCOME_WINDOW_SECONDS = 60;
     private static final long INCOME_MIN_SECONDS = 20;
     private static final double INCOME_EMA_ALPHA = 0.20;
@@ -24,7 +23,6 @@ public class SessionTracker {
     private long sessionPauseStartedMs = 0;
     private long accumulatedPausedDurationMs = 0;
     private long pauseBaselineKills = 0;
-    private long webhookIntervalsSent = 0;
     private long lastSessionKills = 0;
     private long lastSessionTotalKills = 0;
     private long lastSessionDurationSeconds = 0;
@@ -61,7 +59,6 @@ public class SessionTracker {
             sessionPauseStartedMs = 0;
             accumulatedPausedDurationMs = 0;
             pauseBaselineKills = 0;
-            webhookIntervalsSent = 0;
             lastSessionKills = 0;
             lastSessionTotalKills = 0;
             lastSessionDurationSeconds = 0;
@@ -103,7 +100,6 @@ public class SessionTracker {
             sessionPauseStartedMs = 0;
             accumulatedPausedDurationMs = 0;
             pauseBaselineKills = 0;
-            webhookIntervalsSent = 0;
             sessionBaselineItems.clear();
             pauseBaselineItems.clear();
             mostFoundItemName = "";
@@ -141,7 +137,6 @@ public class SessionTracker {
             sessionPauseStartedMs = 0;
             accumulatedPausedDurationMs = 0;
             pauseBaselineKills = 0;
-            webhookIntervalsSent = 0;
             sessionBaselineItems.clear();
             pauseBaselineItems.clear();
             mostFoundItemPrice = -1.0;
@@ -327,19 +322,6 @@ public class SessionTracker {
 
         long elapsedMs = Math.max(0, (now - sessionStartTimeMs) - pausedMs);
         return elapsedMs / 1000;
-    }
-
-    public boolean shouldSendFiveMinuteWebhook() {
-        if (!isSessionRunning()) {
-            return false;
-        }
-
-        long completedIntervals = getElapsedSeconds() / WEBHOOK_INTERVAL_SECONDS;
-        if (completedIntervals > webhookIntervalsSent) {
-            webhookIntervalsSent = completedIntervals;
-            return true;
-        }
-        return false;
     }
 
     public String getTrackedPlayerName() {
