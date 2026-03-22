@@ -1,5 +1,7 @@
 # Wynnic Sessions v2.0 (Player Release)
 
+Download Graphene Api to make the mod work : https://modrinth.com/mod/grapheneui
+
 Organize your Grinding sessions on wynncraft, Ingredient farming, Mythic farming or profession grinding, track everything and greatly upgrade the QOL of your sessions.
 This repository folder is a player-ready release package (no source code).
 
