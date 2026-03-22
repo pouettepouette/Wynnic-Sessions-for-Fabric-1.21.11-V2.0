@@ -12,7 +12,6 @@ Open the menu with K (you can change in keybind minecraft menu).
 4. Launch Minecraft.
 
 ## Notes
-- No source code is included in this release package. Message the author on his github to get the source code.
 
 <img width="1920" height="1200" alt="2026-03-21_03 11 12" src="https://github.com/user-attachments/assets/db252f15-a267-44f8-b08d-8d0663367f79" />
 <img width="1920" height="1200" alt="2026-03-21_03 07 14" src="https://github.com/user-attachments/assets/c2bb5ec8-0903-45ea-a215-680ed6022f91" />
