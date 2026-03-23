@@ -1,4 +1,4 @@
-# Wynnic Sessions v2.0 (Player Release)
+# Wynnic Sessions v2.1 (Player Release)
 
 Download Graphene Api to make the mod work : https://modrinth.com/mod/grapheneui
 

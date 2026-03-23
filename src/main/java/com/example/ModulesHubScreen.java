@@ -66,8 +66,6 @@ public class ModulesHubScreen extends Screen {
     private final List<Row> spotRows     = new ArrayList<>();
     private final List<Row> infoRows     = new ArrayList<>();
     private EditBox lootBonusBox, lootQualityBox, charmBonusBox;
-    private EditBox supportMessageBox;
-    private long supportThanksUntilMs;
     private String toastMessage = "";
     private int toastColor;
     private long toastUntilMs;
@@ -135,9 +133,6 @@ public class ModulesHubScreen extends Screen {
         lootQualityBox = mkBox(boxX, 0, 90, "Loot Quality"); lootQualityBox.setValue(String.valueOf(saved[1]));
         charmBonusBox  = mkBox(boxX, 0, 90, "Charm Bonus");  charmBonusBox.setValue(String.valueOf(saved[2]));
 
-        supportMessageBox = mkBox(SIDEBAR_W + 20, 0, this.width - SIDEBAR_W - 50, "Feedback");
-        supportMessageBox.setMaxLength(220);
-
         spotNameBox = mkBox(SIDEBAR_W + 20, 0, 220, "Name");
         spotNameBox.setMaxLength(64);
         spotZoneBox = mkBox(SIDEBAR_W + 250, 0, 220, "Zone");
@@ -146,7 +141,6 @@ public class ModulesHubScreen extends Screen {
         this.addRenderableWidget(lootBonusBox);
         this.addRenderableWidget(lootQualityBox);
         this.addRenderableWidget(charmBonusBox);
-        this.addRenderableWidget(supportMessageBox);
         this.addRenderableWidget(spotNameBox);
         this.addRenderableWidget(spotZoneBox);
         lootBonusBox.setResponder(s -> onBonusValueChanged());
@@ -326,16 +320,6 @@ public class ModulesHubScreen extends Screen {
 
     private void buildInfoRows() {
         infoRows.clear();
-        infoRows.add(Row.header("Feedback"));
-        infoRows.add(Row.editBox("Message", supportMessageBox, "INFO"));
-        infoRows.add(Row.action("Send Feedback", () -> "Submit your feedback to devs.", "INFO",
-            () -> {
-                MobKillerCalculatorClient.sendSupportMessage(supportMessageBox.getValue());
-                supportMessageBox.setValue("");
-                supportThanksUntilMs = System.currentTimeMillis() + 3000L;
-                toast("Thanks for your feedback!", C_ACCENT);
-            }));
-
         infoRows.add(Row.header("Status"));
         infoRows.add(Row.label("API", () -> MobKillerCalculatorClient.getApiSyncStatus()));
         infoRows.add(Row.label("Market", () -> MobKillerCalculatorClient.getMarketNetworkStatus()));
@@ -1563,7 +1547,6 @@ public class ModulesHubScreen extends Screen {
             lootBonusBox.visible = false;
             lootQualityBox.visible = false;
             charmBonusBox.visible = false;
-            supportMessageBox.visible = false;
             return;
         }
 
@@ -1576,12 +1559,7 @@ public class ModulesHubScreen extends Screen {
             if (row.type == RowType.EDIT_BOX && row.editBox != null) {
                 boolean vis = (y + ROW_H > contentTop + 1 && y < this.height - 4);
                 row.editBox.setY(y + 4);
-                if (row.editBox == supportMessageBox) {
-                    row.editBox.setX(SIDEBAR_W + 10 + this.font.width(row.name) + 12);
-                    row.editBox.setWidth(this.width - row.editBox.getX() - 14);
-                } else {
-                    row.editBox.setX(boxX);
-                }
+                row.editBox.setX(boxX);
                 row.editBox.visible = vis && isEditBoxInActiveTab(row.editBox);
             }
             y += ROW_H;
@@ -1590,9 +1568,6 @@ public class ModulesHubScreen extends Screen {
             lootBonusBox.visible = false; lootQualityBox.visible = false;
             charmBonusBox.visible = false;
         }
-        if (activeTab != TAB_INFO) {
-            supportMessageBox.visible = false;
-        }
         if (activeTab != TAB_SPOTS) {
             spotNameBox.visible = false;
             spotZoneBox.visible = false;
@@ -1600,7 +1575,6 @@ public class ModulesHubScreen extends Screen {
     }
 
     private boolean isEditBoxInActiveTab(EditBox box) {
-        if (box == supportMessageBox) return activeTab == TAB_INFO;
         return activeTab == TAB_VALUES;
     }
 
@@ -2038,7 +2012,6 @@ public class ModulesHubScreen extends Screen {
             case "HUD Colors", "HUD Line Order" -> C_SESSION_COLOR;
             case "History" -> C_HISTORY;
             case "Farm Spots" -> C_ACCENT;
-            case "Feedback" -> C_INFO;
             case "Status" -> C_STATUS;
             case "Links" -> C_LINK;
             case "Credits" -> C_CREDITS;

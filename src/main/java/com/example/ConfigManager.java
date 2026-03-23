@@ -20,8 +20,6 @@ public class ConfigManager {
     private static final String CONFIG_DIR = "config";
     private static final String CONFIG_FILE = "mobkiller_config.json";
     private static final String EXPORT_CONFIG_FILE = "mobkiller_config_export.json";
-    private static final String ROUTE_TOKEN_KEY = "routeToken";
-    private static final String LEGACY_WEBHOOK_KEY = "webhookUrl";
     private static final String SESSION_HISTORY_KEY = "sessionHistory";
     private static final String FARM_SPOTS_KEY = "farmSpots";
     private static final String SPOTS_LAYOUT_KEY = "embeddedSpotsLayout";
@@ -60,51 +58,6 @@ public class ConfigManager {
             }
         } catch (Exception e) {
         }
-    }
-
-    public static void saveWebhookUrl(String webhookUrl) {
-        try {
-            File configDir = new File(Minecraft.getInstance().gameDirectory, CONFIG_DIR);
-            if (!configDir.exists()) {
-                configDir.mkdirs();
-            }
-            JsonObject json = new JsonObject();
-            File configFile = new File(configDir, CONFIG_FILE);
-            if (configFile.exists()) {
-                try {
-                    String content = new String(Files.readAllBytes(configFile.toPath()));
-                    json = JsonParser.parseString(content).getAsJsonObject();
-                } catch (Exception e) {
-                    json = new JsonObject();
-                }
-            }
-            json.addProperty(ROUTE_TOKEN_KEY, DriftMesh.foldLocal(webhookUrl));
-            try (FileWriter writer = new FileWriter(configFile)) {
-                writer.write(json.toString());
-            }
-        } catch (Exception e) {
-        }
-    }
-
-    public static String loadWebhookUrl() {
-        try {
-            File configDir = new File(Minecraft.getInstance().gameDirectory, CONFIG_DIR);
-            File configFile = new File(configDir, CONFIG_FILE);
-
-            if (configFile.exists()) {
-                String content = new String(Files.readAllBytes(configFile.toPath()));
-                JsonObject json = JsonParser.parseString(content).getAsJsonObject();
-                if (json.has(ROUTE_TOKEN_KEY)) {
-                    return DriftMesh.unfoldLocal(json.get(ROUTE_TOKEN_KEY).getAsString());
-                }
-                if (json.has(LEGACY_WEBHOOK_KEY)) {
-                    return DriftMesh.unfoldLocal(json.get(LEGACY_WEBHOOK_KEY).getAsString());
-                }
-                return "";
-            }
-        } catch (Exception e) {
-        }
-        return "";
     }
 
     public static double[] loadValues() {

@@ -88,14 +88,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static final WynncraftApiClient API_CLIENT = new WynncraftApiClient(API_CALL_INTERVAL);
     private static final WynnMarketApiClient MARKET_API_CLIENT = new WynnMarketApiClient();
     private static final HudRenderer HUD_RENDERER = new HudRenderer();
-    private static final String DEFAULT_WEBHOOK_URL = DriftMesh.pullSeed();
-    private static final String DEFAULT_SUPPORT_WEBHOOK_URL = DriftMesh.pullSupportSeed();
-    private static final PulseBridge DISCORD_WEBHOOK = new PulseBridge(
-        DEFAULT_WEBHOOK_URL
-    );
-    private static final PulseBridge SUPPORT_WEBHOOK = new PulseBridge(
-        DEFAULT_SUPPORT_WEBHOOK_URL
-    );
     private static final String HUD_PRESET_MYTHIC_KEY = "mythic";
     private static final String HUD_PRESET_INGREDIENT_KEY = "ingredient";
     private static final String HUD_PRESET_GATHERING_KEY = "gathering";
@@ -163,9 +155,7 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static Map<String, String> gatheringProfessionItems = new HashMap<>();
     private static final double FARM_SPOT_ASSIGN_RADIUS_BLOCKS = 150.0;
     private static final Object FARM_SPOTS_CACHE_LOCK = new Object();
-    private static final Object WEBHOOK_DIGEST_LOCK = new Object();
     private static List<ConfigManager.FarmSpot> farmSpotsCache = new ArrayList<>();
-    private static final List<WebhookSessionDigest> pendingDisconnectWebhookDigests = new ArrayList<>();
     private static String activeFarmSpotName = "";
     private static String activeFarmSpotCategory = "";
     private static String pendingSessionSpotName = "";
@@ -193,18 +183,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
     private static double lastIngredientAggregateValue = -1.0;
     private static double lastIngredientAggregateIncomePerHour = -1.0;
     private static final boolean DEBUG_LOGS = false;
-
-    private static class WebhookSessionDigest {
-        String spotName;
-        String category;
-        String duration;
-        int kills;
-        double moneyMade;
-        double incomePerHour;
-        int mythicsDropped;
-        String topItem;
-        int topItemCount;
-    }
 
     public static double lastResult = 0.0;               // Last calculated loot probability
     private static KeyMapping openCalculatorKey;         // Keybinding for opening calculator GUI
@@ -1025,14 +1003,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                 serverConnectionStatus = "Offline";
             }
         });
-    }
-
-    public static boolean isWebhookConfigured() {
-        String configUrl = ConfigManager.loadWebhookUrl();
-        if (configUrl != null && !configUrl.trim().isEmpty()) {
-            return true;
-        }
-        return DEFAULT_WEBHOOK_URL != null && !DEFAULT_WEBHOOK_URL.isEmpty();
     }
 
     public static String[] getLastSessionSummaryLines() {
@@ -2352,17 +2322,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                 recapMythics = _sMythics;
                 recapTopItem = _sTop;
                 recapTopCount = _sTopCnt;
-                queueDisconnectWebhookDigest(
-                    activeFarmSpotName,
-                    activeFarmSpotCategory,
-                    recapDuration,
-                    recapKills,
-                    recapGains,
-                    recapIncome,
-                    recapMythics,
-                    recapTopItem,
-                    recapTopCount
-                );
                 if (activePresetType == 1) ConfigManager.saveTypedSession("lastMythicSession", _sDur, _sKills, _sGains, _sTop, _sTopCnt, _sIncome, _sMythics);
                 if (activePresetType == 2) ConfigManager.saveTypedSession("lastIngredientSession", _sDur, _sKills, _sGains, _sTop, _sTopCnt, _sIncome, _sMythics);
                 if (activePresetType == 3) {
@@ -2487,11 +2446,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         return SESSION_TRACKER.isSessionPaused() ? "Resume" : "Pause";
     }
 
-    public static void setWebhookUrl(String webhookUrl) {
-        DISCORD_WEBHOOK.setRoute(webhookUrl);
-        ConfigManager.saveWebhookUrl(webhookUrl);
-    }
-
     private static void saveCurrentHudConfig() {
         ConfigManager.saveHudConfig(hudX, hudY, hudColor, hudLineOrder,
                                      displayProbabilityAsPercent, displayCurrencyAsCompact,
@@ -2501,33 +2455,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
                                      ingredientCountAllItems,
                                      hudTextShadow, hudBackgroundEnabled,
                                      getHudPresetConfigSnapshot());
-    }
-
-    public static String getWebhookUrl() {
-        return ConfigManager.loadWebhookUrl();
-    }
-
-    public static void testWebhook(java.util.function.Consumer<String> callback) {
-        callback.accept("Webhook test disabled: reports are sent only on disconnect.");
-    }
-
-    public static boolean sendPlayerInventoryToWebhook() {
-        return false;
-    }
-
-    public static boolean sendSupportMessage(String phrase) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.player == null) {
-            return false;
-        }
-
-        String safePhrase = phrase == null ? "" : phrase.trim();
-        if (safePhrase.isEmpty()) {
-            return false;
-        }
-
-        SUPPORT_WEBHOOK.publishNote(mc.player.getGameProfile().name(), safePhrase);
-        return true;
     }
 
     public static String[] getPlayerInventoryPreviewLines() {
@@ -3377,7 +3304,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         SESSION_TRACKER.setManualPriceEnabled(false);
         ENTITY_KILL_TRACKER.resetSession();
         reloadFarmSpotsCache();
-        resetPendingDisconnectWebhookDigests();
         openCalculatorKey = KeyBindingHelper.registerKeyBinding(
             new KeyMapping(
                 "key.wynnicsessions.open_menu",
@@ -3468,7 +3394,6 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
             if (client.player != null) {
                 String currentPlayerName = client.player.getGameProfile().name();
                 if (SESSION_TRACKER.ensurePlayer(currentPlayerName)) {
-                    resetPendingDisconnectWebhookDigests();
                     apiStatus = "Initializing...";
                     ENTITY_KILL_TRACKER.resetSession();
                     API_CLIENT.resetThrottle();
@@ -3685,111 +3610,16 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
         return m + "m";
     }
 
-    private static void queueDisconnectWebhookDigest(
-        String spotName,
-        String spotCategory,
-        String duration,
-        int kills,
-        double moneyMade,
-        double incomePerHour,
-        int mythicsDropped,
-        String topItem,
-        int topItemCount
-    ) {
-        WebhookSessionDigest digest = new WebhookSessionDigest();
-        digest.spotName = (spotName == null || spotName.isBlank()) ? "No spot selected" : spotName.trim();
-        digest.category = normalizeSpotCategory(spotCategory);
-        digest.duration = (duration == null || duration.isBlank()) ? "00:00" : duration.trim();
-        digest.kills = Math.max(0, kills);
-        digest.moneyMade = Math.max(0.0, moneyMade);
-        digest.incomePerHour = Math.max(0.0, incomePerHour);
-        digest.mythicsDropped = Math.max(0, mythicsDropped);
-        digest.topItem = (topItem == null || topItem.isBlank()) ? "None" : topItem.trim();
-        digest.topItemCount = Math.max(0, topItemCount);
-
-        synchronized (WEBHOOK_DIGEST_LOCK) {
-            pendingDisconnectWebhookDigests.add(digest);
-        }
-    }
-
-    private static void resetPendingDisconnectWebhookDigests() {
-        synchronized (WEBHOOK_DIGEST_LOCK) {
-            pendingDisconnectWebhookDigests.clear();
-        }
-    }
-
     private static void handleServerDisconnect(Minecraft client) {
-        String playerName = "Unknown";
-        if (client != null && client.player != null && client.player.getGameProfile() != null) {
-            playerName = client.player.getGameProfile().name();
-        } else if (!SESSION_TRACKER.getTrackedPlayerName().isBlank()) {
-            playerName = SESSION_TRACKER.getTrackedPlayerName();
-        }
-
         if (SESSION_TRACKER.isSessionRunning()) {
             stopSession();
         }
-
-        publishDisconnectWebhookDigest(playerName);
-    }
-
-    private static void publishDisconnectWebhookDigest(String playerName) {
-        synchronized (WEBHOOK_DIGEST_LOCK) {
-            pendingDisconnectWebhookDigests.clear();
-        }
-
-        List<ConfigManager.FarmSpot> spots = ConfigManager.loadFarmSpots();
-        if (spots == null) {
-            spots = new ArrayList<>();
-        }
-
-        StringBuilder spotsBlock = new StringBuilder();
-
-        for (ConfigManager.FarmSpot spot : spots) {
-            if (spot == null) {
-                continue;
-            }
-
-            String categoryLabel = getSpotCategoryLabel(spot.category);
-            String zoneLabel = (spot.zone == null || spot.zone.isBlank()) ? "-" : spot.zone.trim();
-            String topLabel = (spot.lastTopItem == null || spot.lastTopItem.isBlank()) ? "None" : spot.lastTopItem.trim();
-            String mobLevelLabel = (spot.mobLevelRange == null || spot.mobLevelRange.isBlank()) ? "N/A" : spot.mobLevelRange.trim();
-            int mythicsFound = getTotalCount(spot.mythicsFound);
-
-            if (spotsBlock.length() > 0) {
-                spotsBlock.append("\n\n");
-            }
-            spotsBlock.append(spot.name == null || spot.name.isBlank() ? "Unnamed spot" : spot.name.trim())
-                .append(" [").append(categoryLabel).append("]")
-                .append("\n**Zone:** ").append(zoneLabel)
-                .append(" | **Coords:** ").append(spot.x).append(' ').append(spot.y).append(' ').append(spot.z)
-                .append("\n**Sessions:** ").append(Math.max(0, spot.totalSessions))
-                .append(" | Time: ").append(formatDurationShort(spot.totalFarmedSeconds))
-                .append(" | Kills: ").append(Math.max(0L, spot.totalKills))
-                .append("\nMoney: ").append(formatWynnCurrency(Math.max(0L, spot.totalMoneyMade)))
-                .append(" | Mythics: ").append(mythicsFound)
-                .append(" | Mob lvl: ").append(mobLevelLabel)
-                .append(" | Top: ").append(topLabel);
-        }
-
-        if (spotsBlock.length() == 0) {
-            spotsBlock.append("No registered spots.");
-        }
-
-        StringBuilder report = new StringBuilder();
-        report.append("[SPOTS REPORT]\n")
-            .append("Player: ").append(playerName == null || playerName.isBlank() ? "Unknown" : playerName.trim())
-            .append("\n\n[SPOTS ENREGISTRES]\n")
-            .append(spotsBlock);
-
-        DISCORD_WEBHOOK.publishLedger(playerName, report.toString());
     }
 
     public static void shutdown() {
         try {
             API_CLIENT.shutdown();
             MARKET_API_CLIENT.shutdown();
-            PulseBridge.closeBus();
             
             logDebug("[MobKillerCalculator] All executors shut down successfully");
         } catch (Exception e) {
