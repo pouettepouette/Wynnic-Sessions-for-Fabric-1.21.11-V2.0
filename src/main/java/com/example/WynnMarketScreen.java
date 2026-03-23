@@ -511,7 +511,7 @@ public class WynnMarketScreen extends Screen {
                 startSearchForResolvedItem(matches.get(0));
             } catch (Exception e) {
                 LOGGER.error("[WynnMarket] Search error", e);
-                status = "Error: " + e.getMessage();
+                status = toUserMarketStatus(e);
                 listings.clear();
                 candidates.clear();
                 isSearching = false;
@@ -624,7 +624,7 @@ public class WynnMarketScreen extends Screen {
                     : "";
             } catch (Exception e) {
                 LOGGER.error("[WynnMarket] Search resolved error", e);
-                status = "Error: " + e.getMessage();
+                status = toUserMarketStatus(e);
                 listings.clear();
             }
             isSearching = false;
@@ -701,23 +701,52 @@ public class WynnMarketScreen extends Screen {
             normalizeForComparison(cleanedQuery),
             cleanedQuery.replace('-', ' ').replace('_', ' ').trim()
         };
+        Exception lastFetchError = null;
 
         for (String attempt : attempts) {
             if (attempt == null || attempt.isBlank()) continue;
 
             String encoded = URLEncoder.encode(attempt, StandardCharsets.UTF_8.toString());
-            String body = fetchText("https://wynnmarket.com/api/items/page?search=" + encoded, 8000);
-            JsonElement root = JsonParser.parseString(body);
-            if (!root.isJsonObject()) continue;
+            try {
+                String body = fetchText("https://wynnmarket.com/api/items/page?search=" + encoded, 8000);
+                JsonElement root = JsonParser.parseString(body);
+                if (!root.isJsonObject()) continue;
 
-            JsonObject payload = root.getAsJsonObject();
-            if (!payload.has("items") || !payload.get("items").isJsonArray()) continue;
+                JsonObject payload = root.getAsJsonObject();
+                if (!payload.has("items") || !payload.get("items").isJsonArray()) continue;
 
-            JsonArray items = payload.getAsJsonArray("items");
-            if (!items.isEmpty()) return items;
+                JsonArray items = payload.getAsJsonArray("items");
+                if (!items.isEmpty()) return items;
+            } catch (Exception e) {
+                lastFetchError = e;
+            }
+        }
+
+        if (lastFetchError != null) {
+            throw lastFetchError;
         }
 
         return null;
+    }
+
+    private static String toUserMarketStatus(Exception error) {
+        String message = error == null || error.getMessage() == null ? "" : error.getMessage();
+        String lower = message.toLowerCase(Locale.ROOT);
+
+        if (lower.contains("item not found") || lower.contains("no matching item")) {
+            return "Item not found on WynnMarket";
+        }
+
+        if (lower.contains("http ")
+            || lower.contains("timed out")
+            || lower.contains("timeout")
+            || lower.contains("unknown host")
+            || lower.contains("connection")
+            || lower.contains("reset")) {
+            return "WynnMarket unavailable";
+        }
+
+        return "Market error";
     }
 
     private int matchScore(String query, String candidate) {

@@ -3243,7 +3243,7 @@ public class MobKillerCalculatorClient implements ClientModInitializer {
             @Override
             public void onError(String message) {
                 String lower = message == null ? "" : message.toLowerCase();
-                if (lower.contains("item not found")) {
+                if (lower.contains("item not found") || lower.contains("no matching item")) {
                     SESSION_TRACKER.setMostFoundItemPrice(0.0); // Truly not tradable / unknown item
                 } else {
                     SESSION_TRACKER.setMostFoundItemPriceUnavailable("Market unavailable");
